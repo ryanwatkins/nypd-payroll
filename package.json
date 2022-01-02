@@ -1,0 +1,11 @@
+{
+  "name": "nypd-payroll",
+  "version": "1.0.0",
+  "main": "generate.js",
+  "type": "module",
+  "license": "MIT",
+  "dependencies": {
+    "csv-parse": "^5.0.4",
+    "csv-stringify": "^6.0.5"
+  }
+}
