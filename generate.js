@@ -22,6 +22,28 @@ const SRG_COMMANDS = [
   'STRATEGIC RESP GRP 5 SI'
 ]
 
+const SPECIALIZED_COMMANDS = [
+  'CITYWIDE COUNTERTERRORISM UNIT',
+  'COUNTERTERRORISM BUREAU',
+  'COUNTERTERRORISM DIVISION',
+  'CRITICAL RESPONSE COMMAND',
+  'DISORDER CONTROL UNIT',
+  'EMER SERV SQ 01',
+  'EMER SERV SQ 02',
+  'EMER SERV SQ 03',
+  'EMER SERV SQ 04',
+  'EMER SERV SQ 05',
+  'EMER SERV SQ 06',
+  'EMER SERV SQ 07',
+  'EMER SERV SQ 08',
+  'EMER SERV SQ 09',
+  'EMER SERV SQ 10',
+  'EMERGENCY SERVICES UNIT',
+  'ESU CANINE TEAM',
+  'TB ANTI TERRORISM UNIT',
+  'TECH. ASSIST. & RESPONSE UNIT'
+]
+
 const payFields = [
   'base_salary', 'regular_hours', 'regular_paid',
   'ot_hours', 'ot_paid',
@@ -31,6 +53,11 @@ const payFields = [
 const recordFields = [...payFields, 'years_on_force']
 
 const asOfDate = new Date('11/30/2021') // date NYPD profiles pulled
+
+let ranks = []
+const RANK_MINIMUM = 5 // only calc averages if there is more than X in SRG of this rank
+
+const years = [5, 10, 15, 20, 25, 30] // only 7 SRG above 30 yrs
 
 function loadData() {
   const files = [
@@ -108,6 +135,8 @@ function loadData() {
   // remove records where appt_date is after 30 June of that FY
   records = records.filter(record => new Date(record.appt_date) <= new Date(`6/30/${record.year}`))
 
+  ranks = [...new Set(records.map(record => record.rank))].sort().filter(rank => !rank.startsWith('CHIEF OF'))
+
   return records
 }
 
@@ -129,7 +158,8 @@ function getStats(officers) {
   return stats
 }
 
-function saveCommands({ commands, srg, notsrg }) {
+function saveCommands({ commands,
+                        srg, notsrg }) {
   function toRecord(command, obj) {
     let record = {}
     record.command = command
@@ -146,11 +176,50 @@ function saveCommands({ commands, srg, notsrg }) {
   let records = []
   records.push(toRecord('ALL SRG', srg))
   records.push(toRecord('NON-SRG', notsrg))
+
   for (const [key, value] of byCommand.entries()) {
     records.push(toRecord(key, value.stats))
   }
-
   fs.writeFileSync('commands.csv', stringify(records, { header: true }))
+}
+
+function saveRankYears({ srg, notsrg,
+                         specialized,
+                         srgByRank,
+                         srgByYears }) {
+  function toRecord(command, obj) {
+    let record = {}
+    record.command = command
+    record.officers = obj.officer_count
+    recordFields.forEach(field => {
+      record[`avg_${field}`] = obj.average[field]
+    })
+    return record
+  }
+
+  let records = []
+  records.push(toRecord('NON-SRG', notsrg))
+  records.push(toRecord('ALL SRG', srg))
+  records.push({})
+  records.push(toRecord('OTHER SPECIALIZED', specialized))
+  records.push(toRecord('ALL SRG', srg))
+  records.push({})
+
+  records.push({ command: 'By Rank' })
+  Object.keys(srgByRank).forEach(rank => {
+    records.push(toRecord(`NON-SRG ${rank}`, nonsrgByRank[rank]))
+    records.push(toRecord(`SRG ${rank}`, srgByRank[rank]))
+    records.push({})
+  })
+
+  records.push({ command: 'By Years on Force' })
+  Object.keys(srgByYears).forEach(year => {
+    records.push(toRecord(`NON-SRG < ${year} years`, nonsrgByYears[year]))
+    records.push(toRecord(`SRG < ${year} years`, srgByYears[year]))
+    records.push({})
+  })
+
+  fs.writeFileSync('rankyear.csv', stringify(records, { header: true }))
 }
 
 function savePayChange(records) {
@@ -181,12 +250,55 @@ for (const [key, value] of byCommand.entries()) {
 }
 byCommand = new Map([...byCommand].sort((a, b) => String(a[0]).localeCompare(b[0])))
 
+let srgByRank = {}
+let nonsrgByRank = {}
+
+ranks.forEach(rank => {
+  if (records.filter(record => record.rank == rank && record.is_srg && record.year === 2021).length > RANK_MINIMUM) {
+    srgByRank[rank] = getStats(records.filter(record => record.rank == rank && record.is_srg && record.year === 2021))
+    nonsrgByRank[rank] = getStats(records.filter(record => record.rank == rank && !record.is_srg && record.year === 2021))
+  }
+})
+
+let srgByYears = {}
+let nonsrgByYears = {}
+
+let prevYear = 0
+years.forEach(year => {
+
+  srgByYears[year] = getStats(records.filter(record => {
+    if (!record.is_srg) return false
+    if (record.year !== 2021) return false
+    if ((record.years_on_force > prevYear) && (record.years_on_force <= year)) {
+      return true
+    }
+  }))
+  nonsrgByYears[year] = getStats(records.filter(record => {
+    if (record.is_srg) return false
+    if (record.year !== 2021) return false
+    if ((record.years_on_force > prevYear) && (record.years_on_force <= year)) return true
+  }))
+
+  prevYear = year
+})
+
 saveCommands({
   commands: byCommand,
   srg: getStats(records.filter(record => record.is_srg && record.year === 2021)),
-  notsrg: getStats(records.filter(record => !record.is_srg && record.year === 2021))
+  notsrg: getStats(records.filter(record => !record.is_srg && record.year === 2021)),
 })
 
+saveRankYears({
+  srg: getStats(records.filter(record => record.is_srg && record.year === 2021)),
+  notsrg: getStats(records.filter(record => !record.is_srg && record.year === 2021)),
+  specialized: getStats(records.filter(record => SPECIALIZED_COMMANDS.includes(record.command) && record.year === 2021)),
+
+  srgByRank,
+  nonsrgByRank,
+
+  srgByYears,
+  nonsrgByYears,
+})
 
 // gather paid increase
 
